@@ -2,7 +2,7 @@
 //  SocketAddress.h
 //
 //  Created by BENJAMIN BRYANT BUDIMAN on 05/09/18.
-//  Copyright © 2018 Boku, Inc. All rights reserved.
+//  Copyright © 2021 Boku, Inc. All rights reserved.
 //
 
 #ifndef SocketAddress_h

@@ -2,7 +2,7 @@
 //  SocketAddress.m
 //
 //  Created by BENJAMIN BRYANT BUDIMAN on 05/09/18.
-//  Copyright © 2018 Boku, Inc. All rights reserved.
+//  Copyright © 2021 Boku, Inc. All rights reserved.
 //
 
 #import "SocketAddress.h"
@@ -11,6 +11,9 @@
 #import <netinet/in.h>
 #import <sys/socket.h>
 
+/**
+ A wrapper class that makes it convenient to get relevant information, such as length/size, about a socket address structure. Most socket functions require information about socket address structures as an argument.
+ */
 @implementation SocketAddress
 - (instancetype)initWithSockaddr:(struct sockaddr *)sockaddr {
 	self = [super init];

@@ -2,7 +2,7 @@
 //  HTTPRequester.m
 //
 //  Created by BENJAMIN BRYANT BUDIMAN on 05/09/18.
-//  Copyright © 2018 Boku, Inc. All rights reserved.
+//  Copyright © 2021 Boku, Inc. All rights reserved.
 //
 
 #import "HTTPRequester.h"
@@ -16,9 +16,20 @@
 
 @implementation HTTPRequester
 
-//+ (NSString *)performGetRequest:(NSURL *)url withCookies:(NSString *)cookies {
-+ (NSString *)performGetRequest:(NSURL *)url {
+/**
+ Requests a URL using the local system's cellular data.
+ There are five important steps in this function:
+    1). Find the address of the network interface for the local system's cellular data
+    2). Find the address of the URL requested
+    3). Bind and connect a socket to the addresses obtained from steps 1) and 2)
+    4). Invoke the HTTP request using the instantiated socket from step 3)
+    5). Parse the HTTP response and check whether it contains a redirect HTTP code. If the HTTP response contains a HTTP redirect code, obtain the redirect URL (which is found from the Location header), and return a string containing the redirect URL. E.g. "REDIRECT:https://redirect-url.com"
+ These steps are labeled in the code below.
  
+ @param url The URL to be requested
+ @return A string response from the request to the URL
+ */
++ (NSString *)performGetRequest:(NSURL *)url {
     // Stores any errors that occur during execution
     OSStatus status;
     
@@ -42,16 +53,23 @@
     struct ifaddrs *ifaddrPointer;
     struct ifaddrs *ifaddrs;
     
+    // The getifaddrs() function creates a linked list of structures describing the network interfaces of the local system,
+    // and stores the address of the first item of the list in *ifaddrPointer.
+    // A zero return value for getaddrinfo() indicates successful completion; a non-zero return value indicates failure.
+    // For more information, go to https://man7.org/linux/man-pages/man3/getifaddrs.3.html
     status = getifaddrs(&ifaddrPointer);
     if (status) {
-        return nil;
+        printf("Error occurred, cannot obtain network interfaces of the local system");
+        return @"ERROR";
     }
+    
+    // Step 1). Find the address of the network interface for the local system's cellular data
     
     ifaddrs = ifaddrPointer;
     while (ifaddrs) {
         // If the interface is up
         if (ifaddrs->ifa_flags & IFF_UP) {
-            // If the interface is the pdp_ip0 (cellular) interface
+            // If the interface is the pdp_ip0 (cellular data) interface
             if (strcmp(ifaddrs->ifa_name, "pdp_ip0") == 0) {
                 switch (ifaddrs->ifa_addr->sa_family) {
                     case AF_INET:  // IPv4
@@ -67,8 +85,7 @@
     struct addrinfo *addrinfoPointer;
     struct addrinfo *addrinfo;
     
-    // Generate "hints" for the DNS lookup (namely, search for both IPv4 and
-    // IPv6 addresses)
+    // Generate "hints" for the DNS lookup (namely, search for both IPv4 and IPv6 addresses)
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -81,18 +98,23 @@
         service = [portString UTF8String];
     }
     
+    // Step 2). Find the address of the URL requested
+    
+    // The getaddrinfo() function shall translate the name of a service location (for example, a host name) and/or a service name, and it shall return a set of socket addresses and associated information to be used in creating a socket with which to address the specified service.
+    // A zero return value for getaddrinfo() indicates successful completion; a non-zero return value indicates failure.
+    // For more information, go to https://pubs.opengroup.org/onlinepubs/009696699/functions/getaddrinfo.html
     status = getaddrinfo([[url host] UTF8String], service, &hints, &addrinfoPointer);
     if (status) {
         freeifaddrs(ifaddrPointer);
-        NSString *toReturn = @"ERROR: CANNOT FIND REMOTE ADDRESS";
-        return toReturn;
+        printf("Error occurred, cannot find remote address of requested URL");
+        return @"ERROR";
     }
     
     addrinfo = addrinfoPointer;
     
     while (addrinfo) {
         switch (addrinfo->ai_addr->sa_family) {
-            case AF_INET:  // IPv4
+            case AF_INET: // IPv4
             case AF_INET6: // IPv6
                 [remoteAddresses addObject:[[SocketAddress alloc] initWithSockaddr:addrinfo->ai_addr]];
                 break;
@@ -100,23 +122,25 @@
         addrinfo = addrinfo->ai_next;
     }
     
+    // Define the local address (which is the cellular data IP address) and define the remote address (which is the URL we're trying to reach)
     if ((localAddress = [[localAddresses filteredArrayUsingPredicate:ipv6Predicate] lastObject]) && (remoteAddress = [[remoteAddresses filteredArrayUsingPredicate:ipv6Predicate] lastObject])) {
         // Select the IPv6 route, if possible
-    }
-    else if ((localAddress = [[localAddresses filteredArrayUsingPredicate:ipv4Predicate] lastObject]) && (remoteAddress = [[remoteAddresses filteredArrayUsingPredicate:ipv4Predicate] lastObject])) {
+    } else if ((localAddress = [[localAddresses filteredArrayUsingPredicate:ipv4Predicate] lastObject]) && (remoteAddress = [[remoteAddresses filteredArrayUsingPredicate:ipv4Predicate] lastObject])) {
         // Select the IPv4 route, if possible (and no IPv6 route is available)
-    }
-    else {                                                                                                                                                                                             // No route found, abort
+    } else {
+        // No route found, abort
         freeaddrinfo(addrinfoPointer);
-        NSString *toReturn = @"ERROR: NO ROUTES FOUND";
-        return toReturn;
+        printf("Error occurred, no routes found for HTTP request");
+        return @"ERROR";
     }
     
-    // Create a new socket
+    // Step 3). Bind and connect socket to the addresses obtained from steps 1) and 2).
+    
+    // Instantiate a new socket
     int sock = socket(localAddress.sockaddr->sa_family, SOCK_STREAM, 0);
     if(sock == -1) {
-        NSString *toReturn = @"ERROR: CANNOT CREATE SOCKET";
-        return toReturn;
+        printf("Error occurred, cannot instantiate socket");
+        return @"ERROR";
     }
     
     // Bind the socket to the local address
@@ -126,17 +150,20 @@
     status = connect(sock, remoteAddress.sockaddr, remoteAddress.size);
     if (status) {
         freeaddrinfo(addrinfoPointer);
-        NSString *toReturn =  @"ERROR: CANNOT CONNECT SOCKET TO REMOTE ADDRESS";
-        return toReturn;
+        printf("Error occurred, cannot connect socket to remote address");
+        return @"ERROR";
     }
     
+    // Create the HTTP request string
     NSString *requestString = [NSString stringWithFormat:@"GET %@%@ HTTP/1.1\r\nHost: %@%@\r\n", [url path], [url query] ? [@"?" stringByAppendingString:[url query]] : @"", [url host], [url port] ? [@":" stringByAppendingFormat:@"%@", [url port]] : @""];
     
     requestString = [requestString stringByAppendingString:@"Connection: close\r\n\r\n"];
-   
+    
     const char* request = [requestString UTF8String];
 
     char buffer[4096];
+    
+    // Step 4). Invoke the HTTP request using the instantiated socket
     
     if ([[url scheme] isEqualToString:@"http"]) {
         write(sock, request, strlen(request));
@@ -146,63 +173,78 @@
         do {
             int bytes = (int)read(sock, buffer+received, total-received);
             if (bytes < 0) {
-                NSString *toReturn = @"ERROR: PROBLEM READING RESPONSE";
-                return toReturn;
+                printf("Error occurred while reading HTTP response");
+                return @"ERROR";
             } else if(bytes==0) {
                 break;
             }
             
             received += bytes;
         } while (received < total);
-    } else {
-        // Setup SSL
+    } else { // Setup SSL if the URL is HTTPS
+        // SSLCreateContext allocates and returns a new context.
         SSLContextRef context = SSLCreateContext(kCFAllocatorDefault, kSSLClientSide, kSSLStreamType);
         
+        // SSLSetIOFuncs specifies functions that perform the network I/O operations. We must call this function prior to calling the SSLHandshake function.
         status = SSLSetIOFuncs(context, ssl_read, ssl_write);
         if (status) {
             SSLClose(context);
             CFRelease(context);
-            NSString *toReturn = @"ERROR: SSL1";
-            return toReturn;
+            NSString *errorMessage = @"Error occurred, cannot specify SSL functions needed to perform the network I/O operations, error code:";
+            errorMessage = [errorMessage stringByAppendingString:[@(status) stringValue]];
+            printf("%s", errorMessage);
+            return @"ERROR";
         }
         
+        // SSLSetConnection specifies an I/O connection for a specific session. We must establish a connection before creating a secure session.
         status = SSLSetConnection(context, (SSLConnectionRef)&sock);
         if (status) {
             SSLClose(context);
             CFRelease(context);
-            NSString *toReturn = @"ERROR: SSL2";
-            return toReturn;
+            NSString *errorMessage = @"Error ocurred while specifying SSL I/O connection with peer, error code:";
+            errorMessage = [errorMessage stringByAppendingString:[@(status) stringValue]];
+            printf("%s", errorMessage);
+            return @"ERROR";
         }
         
+        // SSLSetPeerDomainName verifies the common name field in the peer’s certificate. If we call this function and the common name in the certificate does not match the value you specify in the peerName parameter (2nd parameter), then handshake fails and returns an error
         status = SSLSetPeerDomainName(context, [[url host] UTF8String], strlen([[url host] UTF8String]));
         if (status) {
             SSLClose(context);
             CFRelease(context);
-            NSString *toReturn = @"ERROR: SSL3";
-            return toReturn;
+            NSString *errorMessage = @"Error occurred, the common name of the peer's certificate doesn't match with URL being requested";
+            errorMessage = [errorMessage stringByAppendingString:[@(status) stringValue]];
+            printf("%s", errorMessage);
+            return @"ERROR";
         }
         
-        // Repeat this until it doesn't error out
         do {
+            // SSLHandshake performs the SSL handshake. On successful return, the session is ready for normal secure communication using the functions SSLRead and SSLWrite.
             status = SSLHandshake(context);
-        } while (status == errSSLWouldBlock);
+        } while (status == errSSLWouldBlock); // Repeat SSL handshake until it doesn't error out.
         if (status) {
             SSLClose(context);
             CFRelease(context);
-            NSString *toReturn = @"ERROR: SSL4";
-            return toReturn;
+            NSString *errorMessage = @"Error occurred while peforming SSL handshake, error code:";
+            errorMessage = [errorMessage stringByAppendingString:[@(status) stringValue]];
+            printf("%s", errorMessage);
+            return @"ERROR";
         }
         
         size_t processed = 0;
+        // SSLWrite performs a typical application-level write operation.
         status = SSLWrite(context, request, strlen(request), &processed);
         if (status) {
             SSLClose(context);
             CFRelease(context);
-            NSString *toReturn = @"ERROR: SSL5";
-            return toReturn;
+            NSString *errorMessage = @"Error occurred while performing SSL write operation, error code:";
+            errorMessage = [errorMessage stringByAppendingString:[@(status) stringValue]];
+            printf("%s", errorMessage);
+            return @"ERROR";
         }
         
         do {
+            // SSLRead performs a typical application-level read operation.
             status = SSLRead(context, buffer, sizeof(buffer) - 1, &processed);
             buffer[processed] = 0;
             
@@ -215,16 +257,20 @@
         if (status && status != errSSLClosedGraceful) {
             SSLClose(context);
             CFRelease(context);
-            NSString *toReturn = @"ERROR: SSL6";
-            return toReturn;
+            NSString *errorMessage = @"Error occurred, SSL session didn't close gracefully after performing SSL read operation, error code:";
+            errorMessage = [errorMessage stringByAppendingString:[@(status) stringValue]];
+            printf("%s", errorMessage);
+            return @"ERROR";
         }
     }
     
     NSString *response = [[NSString alloc] initWithBytes:buffer length:sizeof(buffer) encoding:NSASCIIStringEncoding];
-  
+    
+    // Step 5). Parse the HTTP response and check whether it contains a redirect HTTP code
+    
     if ([response rangeOfString:@"HTTP/"].location == NSNotFound) {
-        NSString *toReturn = @"ERROR: Done";
-        return toReturn;
+        printf("Error occurred, unknown HTTP response");
+        return @"ERROR";
     }
     
     NSUInteger prefixLocation = [response rangeOfString:@"HTTP/"].location + 9;
@@ -233,6 +279,8 @@
     
     NSString* urlResponseCode = [response substringWithRange:toReturnRange];
     
+    // If the HTTP response contains a HTTP redirect code, obtain the redirect URL (which is found from the Location header), and return a string containing the redirect URL.
+    // For example, "REDIRECT:https://redirect_url.com"
     if ([urlResponseCode isEqualToString:@"3"]) {
         NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"Location: (.*)\r\n" options:NSRegularExpressionCaseInsensitive error:NULL];
         
